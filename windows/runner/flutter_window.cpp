@@ -9,6 +9,49 @@ FlutterWindow::FlutterWindow(const flutter::DartProject& project)
 
 FlutterWindow::~FlutterWindow() {}
 
+void FlutterWindow::SetFullscreen(bool fullscreen) {
+  HWND hwnd = GetHandle();
+  if (!hwnd || fullscreen == is_fullscreen_) {
+    return;
+  }
+
+  if (fullscreen) {
+    restored_style_ = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+    restored_ex_style_ =
+        static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+    GetWindowRect(hwnd, &restored_rect_);
+
+    MONITORINFO monitor_info{};
+    monitor_info.cbSize = sizeof(MONITORINFO);
+    GetMonitorInfo(
+        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor_info);
+
+    SetWindowLongPtr(
+        hwnd, GWL_STYLE,
+        static_cast<LONG_PTR>(restored_style_ & ~WS_OVERLAPPEDWINDOW));
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE,
+                     static_cast<LONG_PTR>(restored_ex_style_ &
+                                           ~(WS_EX_DLGMODALFRAME |
+                                             WS_EX_CLIENTEDGE |
+                                             WS_EX_STATICEDGE)));
+    SetWindowPos(hwnd, HWND_TOP, monitor_info.rcMonitor.left,
+                 monitor_info.rcMonitor.top,
+                 monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
+                 monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+  } else {
+    SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(restored_style_));
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE,
+                     static_cast<LONG_PTR>(restored_ex_style_));
+    SetWindowPos(hwnd, nullptr, restored_rect_.left, restored_rect_.top,
+                 restored_rect_.right - restored_rect_.left,
+                 restored_rect_.bottom - restored_rect_.top,
+                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+  }
+
+  is_fullscreen_ = fullscreen;
+}
+
 bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
     return false;
@@ -25,6 +68,40 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+
+  window_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "app.window",
+          &flutter::StandardMethodCodec::GetInstance());
+  window_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() == "setFullscreen") {
+          bool fullscreen = false;
+          if (const auto* args = call.arguments()) {
+            if (const auto* value = std::get_if<bool>(args)) {
+              fullscreen = *value;
+            }
+          }
+          SetFullscreen(fullscreen);
+          result->Success(flutter::EncodableValue(is_fullscreen_));
+          return;
+        }
+
+        if (call.method_name() == "toggleFullscreen") {
+          SetFullscreen(!is_fullscreen_);
+          result->Success(flutter::EncodableValue(is_fullscreen_));
+          return;
+        }
+
+        if (call.method_name() == "isFullscreen") {
+          result->Success(flutter::EncodableValue(is_fullscreen_));
+          return;
+        }
+
+        result->NotImplemented();
+      });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +117,11 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (window_channel_) {
+    window_channel_->SetMethodCallHandler(nullptr);
+    window_channel_ = nullptr;
+  }
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
