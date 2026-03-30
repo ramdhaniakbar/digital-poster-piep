@@ -7,9 +7,9 @@ void main() {
 
   doWhenWindowReady(() {
     final win = appWindow;
-    win.size = const Size(600, 1000);
-    win.minSize = const Size(600, 1000);
-    win.maxSize = const Size(600, 1000);
+    win.size = const Size(1080, 1920);
+    win.minSize = const Size(1080, 1920);
+    win.maxSize = const Size(1080, 1920);
     win.alignment = Alignment.center;
     win.title = "Smart Table";
     win.show();
